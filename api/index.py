@@ -125,4 +125,4 @@ class handler(BaseHTTPRequestHandler):
         return self.send_json(404, {
             "status": "error",
             "message": "Endpoint not found"
-        })
+        }) 

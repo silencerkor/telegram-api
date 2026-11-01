@@ -1,15 +1,18 @@
 
-import csv
-import io
 import json
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-GITHUB_RAW = (
-    "https://raw.githubusercontent.com/"
-    "silencerkor/telegram-api/main/parts/demo.csv"
-)
+OWNER = "silencerkor"
+REPO = "telegram-api"
+BRANCH = "main"
+
+PARTS = [
+    f"Telegram_csv.part{i:03d}"
+    for i in range(1, 26)
+]
 
 class handler(BaseHTTPRequestHandler):
 
@@ -21,6 +24,20 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def read_github_file(self, filename):
+        url = (
+            f"https://raw.githubusercontent.com/"
+            f"{OWNER}/{REPO}/{BRANCH}/parts/{filename}"
+        )
+
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Telegram-Synthetic-API"}
+        )
+
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.read()
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -51,45 +68,59 @@ class handler(BaseHTTPRequestHandler):
                     "message": "ID harus berupa angka"
                 })
 
-            try:
-                request = urllib.request.Request(
-                    GITHUB_RAW,
-                    headers={"User-Agent": "Synthetic-Demo-API"}
-                )
+            checked = 0
+            missing = []
 
-                with urllib.request.urlopen(
-                    request, timeout=15
-                ) as response:
-                    content = response.read().decode("utf-8")
+            for filename in PARTS:
+                try:
+                    content = self.read_github_file(filename)
+                    checked += 1
 
-                reader = csv.DictReader(
-                    io.StringIO(content),
-                    delimiter="|"
-                )
+                    # Memeriksa batas baris dengan aman.
+                    for line in content.splitlines():
+                        columns = line.decode(
+                            "utf-8", errors="replace"
+                        ).split("|")
 
-                for row in reader:
-                    if row.get("id", "").strip() == search_id:
-                        return self.send_json(200, {
-                            "status": "success",
-                            "mode": "synthetic_demo",
-                            "data": {
-                                "id": search_id,
-                                "name": row.get("name", ""),
-                                "username": row.get("username", ""),
-                                "phone": row.get("phone", "")
-                            }
-                        })
+                        if len(columns) >= 5:
+                            if columns[4].strip() == search_id:
+                                return self.send_json(200, {
+                                    "status": "success",
+                                    "user_id": search_id,
+                                    "record": "FOUND",
+                                    "source": filename,
+                                    "mode": "synthetic_demo"
+                                })
 
-                return self.send_json(404, {
-                    "status": "not_found",
-                    "message": "ID tidak ditemukan"
-                })
+                except urllib.error.HTTPError as error:
+                    if error.code == 404:
+                        missing.append(filename)
+                        continue
 
-            except Exception:
+                    return self.send_json(502, {
+                        "status": "error",
+                        "message": "GitHub gagal diakses",
+                        "http_status": error.code
+                    })
+
+                except Exception:
+                    return self.send_json(502, {
+                        "status": "error",
+                        "message": "Gagal membaca file GitHub"
+                    })
+
+            if missing:
                 return self.send_json(502, {
                     "status": "error",
-                    "message": "Gagal membaca file demo GitHub"
+                    "message": "Sebagian file GitHub tidak tersedia",
+                    "files_checked": checked,
+                    "missing_files": missing
                 })
+
+            return self.send_json(404, {
+                "status": "not_found",
+                "message": "ID tidak ditemukan"
+            })
 
         return self.send_json(404, {
             "status": "error",

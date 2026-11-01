@@ -1,20 +1,20 @@
 
-import glob
+import csv
+import io
 import json
-import os
+import urllib.request
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-BASE_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "parts")
+GITHUB_RAW = (
+    "https://raw.githubusercontent.com/"
+    "silencerkor/telegram-api/main/parts/demo.csv"
 )
-
 
 class handler(BaseHTTPRequestHandler):
 
     def send_json(self, status, data):
         body = json.dumps(data, indent=2).encode("utf-8")
-
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -51,46 +51,45 @@ class handler(BaseHTTPRequestHandler):
                     "message": "ID harus berupa angka"
                 })
 
-            files = sorted(glob.glob(
-                os.path.join(
-                    BASE_DIR,
-                    "Telegram_csv.part[0-9][0-9][0-9]"
+            try:
+                request = urllib.request.Request(
+                    GITHUB_RAW,
+                    headers={"User-Agent": "Synthetic-Demo-API"}
                 )
-            ))
 
-            if not files:
-                return self.send_json(503, {
-                    "status": "error",
-                    "message": "File parts tidak tersedia"
+                with urllib.request.urlopen(
+                    request, timeout=15
+                ) as response:
+                    content = response.read().decode("utf-8")
+
+                reader = csv.DictReader(
+                    io.StringIO(content),
+                    delimiter="|"
+                )
+
+                for row in reader:
+                    if row.get("id", "").strip() == search_id:
+                        return self.send_json(200, {
+                            "status": "success",
+                            "mode": "synthetic_demo",
+                            "data": {
+                                "id": search_id,
+                                "name": row.get("name", ""),
+                                "username": row.get("username", ""),
+                                "phone": row.get("phone", "")
+                            }
+                        })
+
+                return self.send_json(404, {
+                    "status": "not_found",
+                    "message": "ID tidak ditemukan"
                 })
 
-            for path in files:
-                try:
-                    with open(path, "rb") as file:
-                        for line in file:
-                            columns = line.decode(
-                                "utf-8",
-                                errors="replace"
-                            ).rstrip("\r\n").split("|")
-
-                            if len(columns) >= 5:
-                                if columns[4].strip() == search_id:
-                                    return self.send_json(200, {
-                                        "status": "success",
-                                        "mode": "synthetic_demo",
-                                        "data": {
-                                            "user_id": search_id,
-                                            "record": "FOUND"
-                                        }
-                                    })
-
-                except OSError:
-                    continue
-
-            return self.send_json(404, {
-                "status": "not_found",
-                "message": "ID tidak ditemukan"
-            })
+            except Exception:
+                return self.send_json(502, {
+                    "status": "error",
+                    "message": "Gagal membaca file demo GitHub"
+                })
 
         return self.send_json(404, {
             "status": "error",

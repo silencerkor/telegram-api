@@ -5,14 +5,16 @@ import os
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-BASE_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "parts"
+BASE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "parts")
 )
+
 
 class handler(BaseHTTPRequestHandler):
 
     def send_json(self, status, data):
         body = json.dumps(data, indent=2).encode("utf-8")
+
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -28,9 +30,10 @@ class handler(BaseHTTPRequestHandler):
             return self.send_json(200, {
                 "status": "online",
                 "name": "Telegram API",
+                "mode": "synthetic_demo",
                 "endpoints": [
                     "/api/health",
-                    "/api/search?id=15858516"
+                    "/api/search?id=10001"
                 ]
             })
 
@@ -49,13 +52,16 @@ class handler(BaseHTTPRequestHandler):
                 })
 
             files = sorted(glob.glob(
-                os.path.join(BASE_DIR, "Telegram_csv.part*")
+                os.path.join(
+                    BASE_DIR,
+                    "Telegram_csv.part[0-9][0-9][0-9]"
+                )
             ))
 
             if not files:
                 return self.send_json(503, {
                     "status": "error",
-                    "message": "File parts tidak tersedia di deployment"
+                    "message": "File parts tidak tersedia"
                 })
 
             for path in files:
@@ -63,16 +69,19 @@ class handler(BaseHTTPRequestHandler):
                     with open(path, "rb") as file:
                         for line in file:
                             columns = line.decode(
-                                "utf-8", errors="replace"
-                            ).strip().split("|")
+                                "utf-8",
+                                errors="replace"
+                            ).rstrip("\r\n").split("|")
 
                             if len(columns) >= 5:
                                 if columns[4].strip() == search_id:
                                     return self.send_json(200, {
                                         "status": "success",
-                                        "user_id": search_id,
-                                        "record": "FOUND",
-                                        "data_type": "synthetic"
+                                        "mode": "synthetic_demo",
+                                        "data": {
+                                            "user_id": search_id,
+                                            "record": "FOUND"
+                                        }
                                     })
 
                 except OSError:

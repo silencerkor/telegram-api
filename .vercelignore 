@@ -1,0 +1,6 @@
+parts/
+*.rar
+*.csv
+*.zip
+*.7z
+SHA256SUMS.txt

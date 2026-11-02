@@ -1,12 +1,10 @@
 
 import os
-import csv
-import io
 import json
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 OWNER = "silencerkor"
 REPO = "telegram-api"
@@ -14,13 +12,13 @@ BRANCH = "main"
 TOKEN = os.environ.get("GITHUB_TOKEN")
 
 TOTAL_PARTS = 25
-FILE_PREFIX = "Telegram_csv.part"
+PREFIX = "Telegram_csv.part"
 
-def fetch_part(number):
+
+def github_request(filename):
     if not TOKEN:
-        raise RuntimeError("GITHUB_TOKEN belum dipasang di Vercel")
+        raise RuntimeError("GITHUB_TOKEN belum tersedia")
 
-    filename = f"{FILE_PREFIX}{number:03d}"
     url = (
         f"https://api.github.com/repos/{OWNER}/{REPO}"
         f"/contents/parts/{filename}?ref={BRANCH}"
@@ -30,48 +28,48 @@ def fetch_part(number):
         url,
         headers={
             "Authorization": f"Bearer {TOKEN}",
-            "Accept": "application/vnd.github.raw+json",
-            "User-Agent": "Telegram-API"
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Telegram-Synthetic-API"
         }
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read().decode("utf-8", errors="replace")
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
-def search_dataset(target):
-    checked = 0
+def check_parts():
+    results = []
+    total_size = 0
 
     for number in range(1, TOTAL_PARTS + 1):
-        content = fetch_part(number)
+        filename = f"{PREFIX}{number:03d}"
 
-        reader = csv.DictReader(
-            io.StringIO(content, newline=""),
-            delimiter="|"
-        )
+        try:
+            data = github_request(filename)
 
-        if not reader.fieldnames:
-            continue
+            size = data.get("size", 0)
+            total_size += size
 
-        id_column = next(
-            (
-                name for name in reader.fieldnames
-                if name.strip().lower() in
-                ("user_id", "userid", "id")
-            ),
-            None
-        )
+            results.append({
+                "file": filename,
+                "exists": True,
+                "size_bytes": size,
+                "type": data.get("type")
+            })
 
-        if not id_column:
-            continue
+        except urllib.error.HTTPError as error:
+            results.append({
+                "file": filename,
+                "exists": False,
+                "http_status": error.code
+            })
 
-        for row in reader:
-            checked += 1
-
-            if str(row.get(id_column, "")).strip() == target:
-                return True, checked
-
-    return False, checked
+    return {
+        "total_parts": TOTAL_PARTS,
+        "found_parts": sum(1 for item in results if item["exists"]),
+        "total_size_bytes": total_size,
+        "files": results
+    }
 
 
 class handler(BaseHTTPRequestHandler):
@@ -79,7 +77,8 @@ class handler(BaseHTTPRequestHandler):
     def send_json(self, status, data):
         body = json.dumps(
             data,
-            ensure_ascii=False
+            ensure_ascii=False,
+            indent=2
         ).encode("utf-8")
 
         self.send_response(status)
@@ -92,44 +91,37 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        parsed = urlparse(self.path)
-        params = parse_qs(parsed.query)
+        path = urlparse(self.path).path
 
-        if parsed.path == "/api/health":
+        if path in ("/", "/api/health"):
             return self.send_json(200, {
                 "status": "online",
                 "name": "Telegram API",
-                "mode": "synthetic_demo"
-            })
-
-        if parsed.path not in ("/", "/api", "/api/search"):
-            return self.send_json(404, {
-                "status": "error",
-                "message": "Endpoint tidak ditemukan"
-            })
-
-        target = params.get("id", [""])[0].strip()
-
-        if not target:
-            return self.send_json(400, {
-                "status": "error",
-                "message": "Masukkan parameter id",
-                "example": "/api/search?id=10001"
-            })
-
-        try:
-            found, checked = search_dataset(target)
-
-            return self.send_json(200, {
-                "status": "success",
                 "mode": "synthetic_demo",
-                "found": found,
-                "query": target,
-                "records_checked": checked
+                "endpoints": [
+                    "/api/health",
+                    "/api/diagnostic"
+                ]
             })
 
-        except Exception as error:
-            return self.send_json(500, {
-                "status": "error",
-                "message": str(error)
-            })
+        if path == "/api/diagnostic":
+            try:
+                result = check_parts()
+
+                return self.send_json(200, {
+                    "status": "success",
+                    "repository": f"{OWNER}/{REPO}",
+                    "branch": BRANCH,
+                    **result
+                })
+
+            except Exception as error:
+                return self.send_json(500, {
+                    "status": "error",
+                    "message": str(error)
+                })
+
+        return self.send_json(404, {
+            "status": "error",
+            "message": "Endpoint tidak ditemukan"
+        })

@@ -8,41 +8,85 @@ import urllib.error
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-GITHUB_OWNER = "silencerkor"
-GITHUB_REPO = "telegram-api"
-GITHUB_BRANCH = "main"
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+OWNER = "silencerkor"
+REPO = "telegram-api"
+BRANCH = "main"
+TOKEN = os.environ.get("GITHUB_TOKEN")
 
-PART_COUNT = 25
-PART_PATH = "parts/Telegram_csv.part{:03d}"
+TOTAL_PARTS = 25
+FILE_PREFIX = "Telegram_csv.part"
 
-def read_part(part_number):
-    if not GITHUB_TOKEN:
+def fetch_part(number):
+    if not TOKEN:
         raise RuntimeError("GITHUB_TOKEN belum dipasang di Vercel")
 
-    path = PART_PATH.format(part_number)
+    filename = f"{FILE_PREFIX}{number:03d}"
     url = (
-        f"https://api.github.com/repos/{GITHUB_OWNER}/"
-        f"{GITHUB_REPO}/contents/{path}?ref={GITHUB_BRANCH}"
+        f"https://api.github.com/repos/{OWNER}/{REPO}"
+        f"/contents/parts/{filename}?ref={BRANCH}"
     )
 
     request = urllib.request.Request(
         url,
         headers={
-            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Authorization": f"Bearer {TOKEN}",
             "Accept": "application/vnd.github.raw+json",
-            "User-Agent": "Telegram-Synthetic-API"
+            "User-Agent": "Telegram-API"
         }
     )
 
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with urllib.request.urlopen(request, timeout=30) as response:
         return response.read().decode("utf-8", errors="replace")
 
+
+def search_dataset(target):
+    checked = 0
+
+    for number in range(1, TOTAL_PARTS + 1):
+        content = fetch_part(number)
+
+        reader = csv.DictReader(
+            io.StringIO(content, newline=""),
+            delimiter="|"
+        )
+
+        if not reader.fieldnames:
+            continue
+
+        id_column = next(
+            (
+                name for name in reader.fieldnames
+                if name.strip().lower() in
+                ("user_id", "userid", "id")
+            ),
+            None
+        )
+
+        if not id_column:
+            continue
+
+        for row in reader:
+            checked += 1
+
+            if str(row.get(id_column, "")).strip() == target:
+                return True, checked
+
+    return False, checked
+
+
 class handler(BaseHTTPRequestHandler):
-    def send_json(self, status, payload):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    def send_json(self, status, data):
+        body = json.dumps(
+            data,
+            ensure_ascii=False
+        ).encode("utf-8")
+
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header(
+            "Content-Type",
+            "application/json; charset=utf-8"
+        )
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -54,59 +98,34 @@ class handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/health":
             return self.send_json(200, {
                 "status": "online",
+                "name": "Telegram API",
                 "mode": "synthetic_demo"
             })
 
-        if parsed.path not in ("/api", "/api/search"):
-            return self.send_json(404, {"error": "Endpoint not found"})
+        if parsed.path not in ("/", "/api", "/api/search"):
+            return self.send_json(404, {
+                "status": "error",
+                "message": "Endpoint tidak ditemukan"
+            })
 
-        search_id = params.get("id", [""])[0].strip()
+        target = params.get("id", [""])[0].strip()
 
-        if not search_id:
+        if not target:
             return self.send_json(400, {
                 "status": "error",
-                "message": "Masukkan parameter id"
+                "message": "Masukkan parameter id",
+                "example": "/api/search?id=10001"
             })
 
         try:
-            found = False
-            checked = 0
-
-            for number in range(1, PART_COUNT + 1):
-                content = read_part(number)
-                reader = csv.DictReader(
-                    io.StringIO(content),
-                    delimiter="|"
-                )
-
-                if not reader.fieldnames:
-                    continue
-
-                id_column = next(
-                    (column for column in reader.fieldnames
-                     if column.strip().lower() in
-                     ("user_id", "userid", "id")),
-                    None
-                )
-
-                if not id_column:
-                    continue
-
-                for row in reader:
-                    checked += 1
-                    if str(row.get(id_column, "")).strip() == search_id:
-                        found = True
-                        break
-
-                if found:
-                    break
+            found, checked = search_dataset(target)
 
             return self.send_json(200, {
                 "status": "success",
+                "mode": "synthetic_demo",
                 "found": found,
-                "query": search_id,
-                "records_checked": checked,
-                "mode": "synthetic_demo"
+                "query": target,
+                "records_checked": checked
             })
 
         except Exception as error:

@@ -1,118 +1,66 @@
-
 import os
+import csv
 import json
-import urllib.request
-import urllib.error
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
-OWNER = "silencerkor"
-REPO = "telegram-api"
-BRANCH = "main"
-TOKEN = os.environ.get("GITHUB_TOKEN")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEMO_FILE = os.path.join(BASE_DIR, "demo.csv")
 
-TOTAL_PARTS = 25
-PREFIX = "Telegram_csv.part"
+def search_csv(target):
+    if not os.path.exists(DEMO_FILE):
+        raise FileNotFoundError("demo.csv tidak ditemukan")
 
+    with open(DEMO_FILE, "r", encoding="cp1251", newline="") as f:
+        reader = csv.DictReader(f, delimiter="|")
 
-def github_request(filename):
-    if not TOKEN:
-        raise RuntimeError("GITHUB_TOKEN belum tersedia")
+        for row in reader:
+            user_id = str(row.get("User_ID", "")).strip()
+            if user_id == target:
+                return {
+                    "User_ID": user_id,
+                    "Status": "DUMMY"
+                }
 
-    url = (
-        f"https://api.github.com/repos/{OWNER}/{REPO}"
-        f"/contents/parts/{filename}?ref={BRANCH}"
-    )
-
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {TOKEN}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "Telegram-Synthetic-API"
-        }
-    )
-
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def check_parts():
-    results = []
-    total_size = 0
-
-    for number in range(1, TOTAL_PARTS + 1):
-        filename = f"{PREFIX}{number:03d}"
-
-        try:
-            data = github_request(filename)
-
-            size = data.get("size", 0)
-            total_size += size
-
-            results.append({
-                "file": filename,
-                "exists": True,
-                "size_bytes": size,
-                "type": data.get("type")
-            })
-
-        except urllib.error.HTTPError as error:
-            results.append({
-                "file": filename,
-                "exists": False,
-                "http_status": error.code
-            })
-
-    return {
-        "total_parts": TOTAL_PARTS,
-        "found_parts": sum(1 for item in results if item["exists"]),
-        "total_size_bytes": total_size,
-        "files": results
-    }
+    return None
 
 
 class handler(BaseHTTPRequestHandler):
 
     def send_json(self, status, data):
-        body = json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2
-        ).encode("utf-8")
-
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
-        self.send_header(
-            "Content-Type",
-            "application/json; charset=utf-8"
-        )
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
 
-        if path in ("/", "/api/health"):
+        if parsed.path in ("/", "/api/health"):
             return self.send_json(200, {
                 "status": "online",
-                "name": "Telegram API",
-                "mode": "synthetic_demo",
-                "endpoints": [
-                    "/api/health",
-                    "/api/diagnostic"
-                ]
+                "name": "Telegram API"
             })
 
-        if path == "/api/diagnostic":
+        if parsed.path == "/api/search":
+            target = params.get("id", [""])[0].strip()
+
+            if not target:
+                return self.send_json(400, {
+                    "status": "error",
+                    "message": "Parameter id wajib diisi"
+                })
+
             try:
-                result = check_parts()
+                result = search_csv(target)
 
                 return self.send_json(200, {
                     "status": "success",
-                    "repository": f"{OWNER}/{REPO}",
-                    "branch": BRANCH,
-                    **result
+                    "found": result is not None,
+                    "data": result
                 })
 
             except Exception as error:
